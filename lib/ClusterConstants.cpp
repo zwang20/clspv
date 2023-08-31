@@ -150,6 +150,8 @@ clspv::ClusterModuleScopeConstantVars::run(Module &M, ModuleAnalysisManager &) {
         } else if (auto *inst = dyn_cast<Instruction>(user)) {
           unsigned index = initializers.idFor(GV->getInitializer()) - 1;
 
+          Type *PointeeType = clustered_gv->getValueType();
+          Value *Ptr = clustered_gv;
           if (clspv::Option::PhysicalStorageBuffers()) {
             auto *bb = inst->getParent();
             auto *clustered_ptr_ty = clspv::GetPushConstantType(
@@ -164,14 +166,22 @@ clspv::ClusterModuleScopeConstantVars::run(Module &M, ModuleAnalysisManager &) {
             auto *clustered_ptr =
                 CastInst::Create(Instruction::CastOps::IntToPtr,
                                   clustered_ptr_val, ptr_type, "", inst);
-            Instruction *gep = GetElementPtrInst::CreateInBounds(
-                type, clustered_ptr, {zero, Builder.getInt32(index)}, "",
-                inst);
-            user->replaceUsesOfWith(GV, gep);
+            PointeeType = type;
+            Ptr = clustered_ptr;
+          }
+          if (auto phi = dyn_cast<PHINode>(inst)) {
+            for (unsigned i = 0; i < phi->getNumIncomingValues(); i++) {
+              if (phi->getIncomingValue(i) != GV) {
+                continue;
+              }
+              Instruction *gep = GetElementPtrInst::CreateInBounds(
+                  PointeeType, Ptr, {zero, Builder.getInt32(index)}, "",
+                  phi->getIncomingBlock(i)->getFirstNonPHI());
+              phi->setIncomingValue(i, gep);
+            }
           } else {
             Instruction *gep = GetElementPtrInst::CreateInBounds(
-                clustered_gv->getValueType(), clustered_gv,
-                {zero, Builder.getInt32(index)}, "", inst);
+                PointeeType, Ptr, {zero, Builder.getInt32(index)}, "", inst);
             user->replaceUsesOfWith(GV, gep);
           }
         } else {
